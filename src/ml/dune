@@ -1,0 +1,8 @@
+(env
+  (dev
+    (flags (:standard -warn-error -A -w -34))))
+
+(library
+  (name bugbase)
+  (libraries extracted unix str)
+  )

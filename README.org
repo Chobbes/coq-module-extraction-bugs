@@ -1,0 +1,107 @@
+* Introduction
+
+This repository contains a fairly minimal example of a problem I'm
+encountering with the Coq module system with ocaml extraction.
+
+The code I have works in Coq, but upon extraction I get compilation
+errors with ocaml like the following:
+
+#+begin_example
+File "ml/extracted/MyModules.mli", lines 243-244, characters 8-41:
+243 | ........type value_byte = MEM'.Byte.value_byte =
+244 |         | ExtractByte of LP.V.value * nat
+Error: This variant or record definition does not match that of type
+         MEM'.Byte.value_byte
+       Constructors do not match:
+         ExtractByte of LP'.V.value * Datatypes.nat
+       is not the same as:
+         ExtractByte of LP.V.value * Datatypes.nat
+       The type LP'.V.value is not equal to the type LP.V.value
+#+end_example
+
+* Building
+
+Should be able to just:
+
+#+begin_src sh
+  cd src
+  make extracted
+#+end_src
+
+To see the error. There are no dependencies beyond ~Coq~ and ~coq_makefile~.
+
+If you use nix, this project has a flake that you can use to get the
+same versions of Coq as me (8.16). Running ~nix build -L .~ should try
+to build the project and give you a build log.
+
+* Some more background
+
+The issue seems to arise because of the ~Module Language := Make_Lang
+LP MEM~ line in ~InterpreterStack_common~. It seems like the mixture
+of having a module like ~Byte~ in the ~Module Type~ ~Memory~ and the
+~Declare Module MEM : Memory LP~ results in an incorrect module
+interface getting extracted. The ocaml ~.mli~ file has this:
+
+#+begin_src ocaml
+  module Make_InterpreterStack :
+   functor (LP':LanguageParams) ->
+   functor (MEM':sig
+    module Byte :
+     sig
+      type value_byte =
+      | ExtractByte of LP'.V.value * nat
+
+      val value_byte_rect : (LP'.V.value -> nat -> 'a1) -> value_byte -> 'a1
+
+      val value_byte_rec : (LP'.V.value -> nat -> 'a1) -> value_byte -> 'a1
+     end
+   end) ->
+   sig
+    module LP :
+     LanguageParams
+
+    module MEM :
+     sig
+      module Byte :
+       sig
+        type value_byte = MEM'.Byte.value_byte =
+        | ExtractByte of LP'.V.value * nat
+
+        val value_byte_rect : (LP'.V.value -> nat -> 'a1) -> value_byte -> 'a1
+
+        val value_byte_rec : (LP'.V.value -> nat -> 'a1) -> value_byte -> 'a1
+       end
+     end
+
+    module Language :
+     sig
+      module MEM :
+       sig
+        module Byte :
+         sig
+          type value_byte = MEM'.Byte.value_byte =
+          | ExtractByte of LP.V.value * nat
+
+          val value_byte_rect : (LP.V.value -> nat -> 'a1) -> value_byte -> 'a1
+
+          val value_byte_rec : (LP.V.value -> nat -> 'a1) -> value_byte -> 'a1
+         end
+       end
+     end
+   end
+#+end_src
+
+And the problem seems to be that the ~Language~ module ends up using ~LP.V.value~ from the ~LP~ module declared here:
+
+#+begin_src coq
+  Module Type InterpreterStack.
+    Declare Module LP : LanguageParams.
+    Declare Module MEM : Memory LP.
+    Include InterpreterStack_common LP MEM.
+  End InterpreterStack.
+#+end_src
+
+But it doesn't know that this ~LP = LP'.~ Coq itself seems to be okay with this arrangement of modules, but it doesn't work when extracted.
+
+Interestingly the ~MEM~ module seems to use ~LP'.V.value~
+directly... I guess that might be because it gets defined using ~with Module MEM := MEM'.~ Thus must act differently behind the scenes?
